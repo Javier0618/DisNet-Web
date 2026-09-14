@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useParams, useSearchParams, useNavigate } from 'react-router-dom';
 import { db, doc, getDoc } from '../services/firebase';
 import { tmdbService } from '../services/tmdb';
 import { useAuth } from '../context/AuthContext';
-import { ArrowLeft, Play, Pause, Volume2, Maximize, RotateCcw, SkipForward } from 'lucide-react';
+import { ArrowLeft } from 'lucide-react';
 
 export default function VideoPlayer() {
   const { type, id } = useParams();
@@ -16,6 +16,7 @@ export default function VideoPlayer() {
 
   const [content, setContent] = useState(null);
   const [videoUrl, setVideoUrl] = useState('');
+  const [isVideoFile, setIsVideoFile] = useState(false);
   const [loading, setLoading] = useState(true);
   const [progressTime, setProgressTime] = useState(0);
 
@@ -44,29 +45,43 @@ export default function VideoPlayer() {
 
         if (data) {
           setContent(data);
-          // Get specific episode video URL if series/anime
-          let embedUrl = data.video_url || 'https://www.youtube.com/embed/dQw4w9WgXcQ';
+          let rawVideoUrl = data.video_url || 'https://www.youtube.com/embed/dQw4w9WgXcQ';
 
-          if (data.seasons && data.seasons[`season_${seasonParam}`]) {
-            const epKey = `episode_${episodeParam}`;
-            const epData = data.seasons[`season_${seasonParam}`].episodes?.[epKey];
-            if (epData && epData.video_url) {
-              embedUrl = epData.video_url;
+          // Extract episode video URL if series or anime
+          if (data.seasons) {
+            // Find season by key season_N or number
+            const seasonObj = data.seasons[`season_${seasonParam}`] ||
+              Object.values(data.seasons).find(s => String(s.season_number) === String(seasonParam));
+
+            if (seasonObj && seasonObj.episodes) {
+              const episodeObj = seasonObj.episodes[`episode_${episodeParam}`] ||
+                Object.values(seasonObj.episodes).find(e => String(e.episode_number) === String(episodeParam));
+
+              if (episodeObj && episodeObj.video_url) {
+                rawVideoUrl = episodeObj.video_url;
+              }
             }
           }
 
-          // Format YouTube URLs to include autoplay
-          if (embedUrl.includes('youtube.com/watch?v=')) {
-            const videoId = embedUrl.split('v=')[1]?.split('&')[0];
-            embedUrl = `https://www.youtube.com/embed/${videoId}?autoplay=1&enablejsapi=1`;
-          } else if (embedUrl.includes('youtu.be/')) {
-            const videoId = embedUrl.split('youtu.be/')[1]?.split('?')[0];
-            embedUrl = `https://www.youtube.com/embed/${videoId}?autoplay=1&enablejsapi=1`;
-          } else if (embedUrl.includes('youtube.com/embed/')) {
-            embedUrl = `${embedUrl}?autoplay=1&enablejsapi=1`;
+          // Determine if rawVideoUrl is a direct video file (.mp4, .webm, .m3u8, etc.) or embed URL
+          const isDirectFile = /\.(mp4|webm|m3u8|ogg)(\?.*)?$/i.test(rawVideoUrl);
+          setIsVideoFile(isDirectFile);
+
+          let finalUrl = rawVideoUrl;
+          if (!isDirectFile) {
+            // Format YouTube URLs to include autoplay if embed URL
+            if (finalUrl.includes('youtube.com/watch?v=')) {
+              const videoId = finalUrl.split('v=')[1]?.split('&')[0];
+              finalUrl = `https://www.youtube.com/embed/${videoId}?autoplay=1&enablejsapi=1`;
+            } else if (finalUrl.includes('youtu.be/')) {
+              const videoId = finalUrl.split('youtu.be/')[1]?.split('?')[0];
+              finalUrl = `https://www.youtube.com/embed/${videoId}?autoplay=1&enablejsapi=1`;
+            } else if (finalUrl.includes('youtube.com/embed/')) {
+              finalUrl = finalUrl.includes('?') ? `${finalUrl}&autoplay=1&enablejsapi=1` : `${finalUrl}?autoplay=1&enablejsapi=1`;
+            }
           }
 
-          setVideoUrl(embedUrl);
+          setVideoUrl(finalUrl);
 
           // Restore saved watch progress if available
           const savedProg = userData?.watchProgress?.[String(id)];
@@ -84,7 +99,7 @@ export default function VideoPlayer() {
     fetchVideoData();
   }, [type, id, seasonParam, episodeParam]);
 
-  // Periodic watch progress tracking simulation
+  // Periodic watch progress tracking
   useEffect(() => {
     if (!content) return;
     const interval = setInterval(() => {
@@ -92,7 +107,7 @@ export default function VideoPlayer() {
         const nextTime = prev + 5;
         saveWatchProgress(content, {
           progress: nextTime,
-          duration: 7200, // standard duration representation
+          duration: 7200,
           season: seasonParam,
           episode: episodeParam
         });
@@ -116,7 +131,7 @@ export default function VideoPlayer() {
     <div className="fixed inset-0 bg-black z-50 flex flex-col justify-between overflow-hidden">
 
       {/* Top Header Overlay */}
-      <div className="absolute top-0 inset-x-0 p-6 z-20 bg-gradient-to-b from-black/90 via-black/40 to-transparent flex items-center justify-between">
+      <div className="absolute top-0 inset-x-0 p-6 z-20 bg-gradient-to-b from-black/90 via-black/40 to-transparent flex items-center justify-between pointer-events-auto">
         <div className="flex items-center gap-4">
           <button
             onClick={() => navigate(-1)}
@@ -137,16 +152,25 @@ export default function VideoPlayer() {
         </div>
       </div>
 
-      {/* Video Iframe Embed */}
+      {/* Video Player (HTML5 Video or iFrame Embed) */}
       <div className="w-full h-full flex items-center justify-center">
         {videoUrl ? (
-          <iframe
-            src={videoUrl}
-            title={content?.title || 'Reproductor DisNet'}
-            className="w-full h-full border-0"
-            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-            allowFullScreen
-          />
+          isVideoFile ? (
+            <video
+              src={videoUrl}
+              controls
+              autoPlay
+              className="w-full h-full object-contain"
+            />
+          ) : (
+            <iframe
+              src={videoUrl}
+              title={content?.title || 'Reproductor DisNet'}
+              className="w-full h-full border-0"
+              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+              allowFullScreen
+            />
+          )
         ) : (
           <div className="text-gray-400 font-medium">No se pudo cargar la fuente de video.</div>
         )}
