@@ -232,7 +232,12 @@ export default function DetailsPage() {
             {/* Action Buttons */}
             <div className="flex flex-wrap items-center justify-center md:justify-start gap-4 pt-2">
               <button
-                onClick={() => navigate(`/watch/${content.media_type || 'movie'}/${content.id}`)}
+                onClick={() => {
+                  const savedProg = userData?.watchProgress?.[String(content.id)];
+                  const targetSeason = savedProg?.season || (content.seasons ? (Object.values(content.seasons)[0]?.season_number || 1) : 1);
+                  const targetEpisode = savedProg?.episode || 1;
+                  navigate(`/watch/${content.media_type || 'movie'}/${content.id}${content.media_type !== 'movie' ? `?season=${targetSeason}&episode=${targetEpisode}` : ''}`);
+                }}
                 className="flex items-center gap-3 px-8 py-3.5 rounded-full bg-gradient-to-r from-blue-600 to-red-600 hover:from-blue-500 hover:to-red-500 text-white font-extrabold text-sm shadow-xl shadow-blue-500/25 transform hover:scale-105 transition-all"
               >
                 <Play className="w-5 h-5 fill-white" />
