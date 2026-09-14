@@ -1,10 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { db, collection, getDocs } from '../services/firebase';
-import { tmdbService } from '../services/tmdb';
+import { contentService } from '../services/contentService';
 import HeroSlider from '../components/HeroSlider';
 import ContentRow from '../components/ContentRow';
 import { HeroSkeleton, ContentSkeleton } from '../components/SkeletonLoader';
-import { TrendingUp, Film, Tv, Play, Sparkles, Clock, Star } from 'lucide-react';
+import { TrendingUp, Film, Tv, Play, Sparkles, Clock } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
 
@@ -18,63 +17,57 @@ export default function Home() {
   const { userData } = useAuth();
   const navigate = useNavigate();
 
+  const processAndSetContent = (allContent) => {
+    if (!allContent || allContent.length === 0) return;
+
+    setHeroItems(allContent.slice(0, 5));
+    setTrending(allContent.slice(0, 15));
+
+    const movies = allContent.filter(item => item.media_type === 'movie');
+    setPopularMovies(movies.length > 0 ? movies : allContent.slice(0, 10));
+
+    const series = allContent.filter(item => item.media_type === 'tv' || item.media_type === 'series');
+    setPopularSeries(series.length > 0 ? series : allContent.slice(5, 15));
+
+    const animes = allContent.filter(item =>
+      item.media_type === 'anime' ||
+      (item.original_language === 'ja' && (item.genre_ids?.includes(16) || item.genres?.includes('Animación')))
+    );
+    setPopularAnimes(animes.length > 0 ? animes : allContent.slice(2, 12));
+  };
+
   useEffect(() => {
-    async function loadData() {
-      try {
-        setLoading(true);
-        // 1. Try fetching existing content from Firestore `content` collection
-        const querySnapshot = await getDocs(collection(db, 'content'));
-        const firestoreContent = [];
-        querySnapshot.forEach((doc) => {
-          firestoreContent.push({ ...doc.data(), docId: doc.id });
+    let isMounted = true;
+
+    async function loadDataProgressively() {
+      // 1. Instant check/load from Firestore/Cache
+      const firestoreData = await contentService.getContent();
+
+      if (!isMounted) return;
+
+      if (firestoreData && firestoreData.length > 0) {
+        processAndSetContent(firestoreData);
+        setLoading(false); // Instantly render UI if cache/firestore has data!
+      }
+
+      // 2. If firestore content is small (< 8 items), fetch TMDb fallbacks in background without blocking initial UI
+      if (!firestoreData || firestoreData.length < 8) {
+        contentService.fetchTmdbFallbacks().then(fallbacks => {
+          if (!isMounted) return;
+          const merged = [...(firestoreData || []), ...fallbacks];
+          processAndSetContent(merged);
+          setLoading(false);
         });
-
-        let allContent = firestoreContent;
-
-        // 2. If firestore content is empty or sparse, supplement with TMDb API trending/popular
-        if (allContent.length < 5) {
-          try {
-            const tmdbTrending = await tmdbService.getTrending('all', 'week');
-            const tmdbMovies = await tmdbService.searchMovies('Marvel', 1);
-            const tmdbSeries = await tmdbService.searchTvShows('Disney', 1);
-            const tmdbAnime = await tmdbService.searchTvShows('Anime', 1);
-
-            const fetchedMovies = (tmdbMovies.results || []).map(m => ({ ...m, media_type: 'movie' }));
-            const fetchedSeries = (tmdbSeries.results || []).map(s => ({ ...s, media_type: 'tv' }));
-            const fetchedAnimes = (tmdbAnime.results || []).map(a => ({ ...a, media_type: 'anime' }));
-
-            allContent = [...allContent, ...tmdbTrending.results, ...fetchedMovies, ...fetchedSeries, ...fetchedAnimes];
-          } catch (e) {
-            console.warn("TMDb fallback error:", e);
-          }
-        }
-
-        // Categorize content
-        const hero = allContent.slice(0, 5);
-        setHeroItems(hero);
-
-        setTrending(allContent.slice(0, 15));
-
-        const movies = allContent.filter(item => item.media_type === 'movie');
-        setPopularMovies(movies.length > 0 ? movies : allContent.slice(0, 10));
-
-        const series = allContent.filter(item => item.media_type === 'tv' || item.media_type === 'series');
-        setPopularSeries(series.length > 0 ? series : allContent.slice(5, 15));
-
-        const animes = allContent.filter(item =>
-          item.media_type === 'anime' ||
-          (item.original_language === 'ja' && (item.genre_ids?.includes(16) || item.genres?.includes('Animación')))
-        );
-        setPopularAnimes(animes.length > 0 ? animes : allContent.slice(2, 12));
-
-      } catch (err) {
-        console.error("Error loading home page content:", err);
-      } finally {
+      } else {
         setLoading(false);
       }
     }
 
-    loadData();
+    loadDataProgressively();
+
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   // Continue watching items from user profile state

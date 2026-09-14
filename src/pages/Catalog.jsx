@@ -1,9 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { db, collection, getDocs } from '../services/firebase';
-import { tmdbService } from '../services/tmdb';
+import { contentService } from '../services/contentService';
 import ContentCard from '../components/ContentCard';
 import { ContentSkeleton } from '../components/SkeletonLoader';
-import { Filter, Search, Film, Tv, Play, Sparkles } from 'lucide-react';
+import { Filter, Film } from 'lucide-react';
 
 export default function Catalog({ mediaType = 'movie', pageTitle = 'Películas', icon: Icon = Film }) {
   const [items, setItems] = useState([]);
@@ -13,46 +12,19 @@ export default function Catalog({ mediaType = 'movie', pageTitle = 'Películas',
   const [genresList, setGenresList] = useState([]);
 
   useEffect(() => {
-    async function loadCatalog() {
-      try {
-        setLoading(true);
-        // Query Firestore for items matching mediaType
-        const querySnapshot = await getDocs(collection(db, 'content'));
-        const firestoreDocs = [];
-        querySnapshot.forEach(doc => {
-          const data = doc.data();
-          if (data.media_type === mediaType || (mediaType === 'anime' && (data.genres?.includes('Animación') || data.genres?.includes('Anime')))) {
-            firestoreDocs.push({ ...data, docId: doc.id });
-          }
-        });
+    let isMounted = true;
 
-        let catalogData = firestoreDocs;
+    async function loadCatalogProgressively() {
+      const allFirestore = await contentService.getContent();
 
-        // Fallback fetch TMDb if Firestore has less items
-        if (catalogData.length < 8) {
-          try {
-            let tmdbRes;
-            if (mediaType === 'movie') {
-              tmdbRes = await tmdbService.searchMovies('Marvel', 1);
-            } else if (mediaType === 'anime') {
-              tmdbRes = await tmdbService.searchTvShows('Anime', 1);
-            } else {
-              tmdbRes = await tmdbService.searchTvShows('Disney', 1);
-            }
+      if (!isMounted) return;
 
-            const tmdbFormatted = (tmdbRes.results || []).map(item => ({
-              ...item,
-              media_type: mediaType,
-              title: item.title || item.name,
-              genres: item.genre_ids ? ['Acción', 'Aventura', 'Animación', 'Drama', 'Comedia'].slice(0, 2) : ['Variado']
-            }));
-            catalogData = [...catalogData, ...tmdbFormatted];
-          } catch (e) {
-            console.warn("Catalog fetch error:", e);
-          }
-        }
+      const matchedDocs = (allFirestore || []).filter(data =>
+        data.media_type === mediaType ||
+        (mediaType === 'anime' && (data.genres?.includes('Animación') || data.genres?.includes('Anime')))
+      );
 
-        // Extract unique genres
+      const updateCatalogState = (catalogData) => {
         const allGenres = new Set();
         catalogData.forEach(item => {
           if (Array.isArray(item.genres)) {
@@ -63,15 +35,41 @@ export default function Catalog({ mediaType = 'movie', pageTitle = 'Películas',
         setGenresList(['Todos', ...Array.from(allGenres)]);
         setItems(catalogData);
         setFilteredItems(catalogData);
+      };
 
-      } catch (err) {
-        console.error("Catalog load error:", err);
-      } finally {
+      if (matchedDocs.length > 0) {
+        updateCatalogState(matchedDocs);
+        setLoading(false);
+      }
+
+      if (matchedDocs.length < 8) {
+        contentService.fetchTmdbFallbacks().then(fallbacks => {
+          if (!isMounted) return;
+          const filteredFallbacks = fallbacks.filter(item => {
+            if (mediaType === 'movie') return item.media_type === 'movie';
+            if (mediaType === 'anime') return item.media_type === 'anime' || (item.genre_ids?.includes(16));
+            return item.media_type === 'tv' || item.media_type === 'series';
+          }).map(item => ({
+            ...item,
+            media_type: mediaType,
+            title: item.title || item.name,
+            genres: item.genre_ids ? ['Acción', 'Aventura', 'Animación', 'Drama'].slice(0, 2) : ['Variado']
+          }));
+
+          const merged = [...matchedDocs, ...filteredFallbacks];
+          updateCatalogState(merged);
+          setLoading(false);
+        });
+      } else {
         setLoading(false);
       }
     }
 
-    loadCatalog();
+    loadCatalogProgressively();
+
+    return () => {
+      isMounted = false;
+    };
   }, [mediaType]);
 
   const handleGenreChange = (genre) => {
